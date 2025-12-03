@@ -154,68 +154,103 @@ def save_cookie(var_name: str, cookie: str):
         return False
 
 # ---------------- 登录逻辑 ----------------
+
 def session_login(user, password, solver_type, api_base_url, client_key):
+    """
+    使用验证码服务 + 账号密码登录，返回新的 Cookie 字符串；
+    登录失败或被风控时返回 None。
+    """
+    # 1. 先获取 Turnstile / YesCaptcha token
     try:
         if solver_type.lower() == "yescaptcha":
             print("正在使用 YesCaptcha 解决验证码...")
             solver = YesCaptchaSolver(
                 api_base_url=api_base_url or "https://api.yescaptcha.com",
-                client_key=client_key
+                client_key=client_key,
             )
-        else:  # 默认使用 turnstile_solver
+        else:
+            # 默认使用 turnstile_solver
             print("正在使用 TurnstileSolver 解决验证码...")
             solver = TurnstileSolver(
                 api_base_url=api_base_url,
-                client_key=client_key
+                client_key=client_key,
             )
 
         token = solver.solve(
             url="https://www.nodeseek.com/signIn.html",
             sitekey="0x4AAAAAAAaNy7leGjewpVyR",
-            verbose=True
+            verbose=True,
         )
         if not token:
             print("验证码解析失败")
             return None
-    except Exception as e:
+    except (YesCaptchaSolverError, TurnstileSolverError, Exception) as e:
         print(f"验证码错误: {e}")
         return None
 
+    # 2. 携带 token 和账号密码发起登录
     session = requests.Session(impersonate="chrome110")
+    # 先访问一遍登录页，模拟浏览器行为
     session.get("https://www.nodeseek.com/signIn.html")
 
     data = {
         "username": user,
         "password": password,
         "token": token,
-        "source": "turnstile"
+        "source": "turnstile",
     }
     headers = {
-        'User-Agent': "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36 Edg/125.0.0.0",
-        'sec-ch-ua': "\"Not A(Brand\";v=\"99\", \"Microsoft Edge\";v=\"121\", \"Chromium\";v=\"121\"",
-        'sec-ch-ua-mobile': "?0",
-        'sec-ch-ua-platform': "\"Windows\"",
-        'origin': "https://www.nodeseek.com",
-        'sec-fetch-site': "same-origin",
-        'sec-fetch-mode': "cors",
-        'sec-fetch-dest': "empty",
-        'referer': "https://www.nodeseek.com/signIn.html",
-        'accept-language': "zh-CN,zh;q=0.9,en;q=0.8,en-GB;q=0.7,en-US;q=0.6",
-        'Content-Type': "application/json"
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/125.0.0.0 Safari/537.36 Edg/125.0.0.0"
+        ),
+        "sec-ch-ua": "\"Not A(Brand\";v=\"99\", \"Microsoft Edge\";v=\"121\", \"Chromium\";v=\"121\"",
+        "sec-ch-ua-mobile": "?0",
+        "sec-ch-ua-platform": "\"Windows\"",
+        "origin": "https://www.nodeseek.com",
+        "sec-fetch-site": "same-origin",
+        "sec-fetch-mode": "cors",
+        "sec-fetch-dest": "empty",
+        "referer": "https://www.nodeseek.com/signIn.html",
+        "accept-language": "zh-CN,zh;q=0.9,en;q=0.8,en-GB;q=0.7,en-US;q=0.6",
+        "Content-Type": "application/json",
     }
+
     try:
-        response = session.post("https://www.nodeseek.com/api/account/signIn", json=data, headers=headers)
-        resp_json = response.json()
+        response = session.post(
+            "https://www.nodeseek.com/api/account/signIn",
+            json=data,
+            headers=headers,
+        )
+
+        # 打印基础调试信息
+        print(f"[调试] 登录接口 HTTP 状态码: {response.status_code}")
+
+        # 单独捕获 JSON 解析错误
+        try:
+            resp_json = response.json()
+        except Exception as e:
+            debug_msg = (
+                f"登录接口 JSON 解析失败: {e} | 状态码={response.status_code} | "
+                f"响应前200字符={repr(response.text[:200])}"
+            )
+            print("[调试] 登录接口返回的不是 JSON（可能是 Cloudflare/风控页）:", debug_msg)
+            return None
+
+        # 正常 JSON 的处理逻辑
         if resp_json.get("success"):
             cookies = session.cookies.get_dict()
-            cookie_string = '; '.join([f"{k}={v}" for k, v in cookies.items()])
+            cookie_string = "; ".join([f"{k}={v}" for k, v in cookies.items()])
+            print("[调试] 登录成功，获取到 Cookie:", cookie_string)
             return cookie_string
         else:
-            print("登录失败:", resp_json.get("message"))
+            print("登录失败:", resp_json.get("message", resp_json))
             return None
     except Exception as e:
         print("登录异常:", e)
         return None
+
 
 # ---------------- 签到逻辑 ----------------
 def sign(ns_cookie, ns_random):
@@ -497,3 +532,4 @@ if __name__ == "__main__":
             print("所有Cookie已成功保存")
         except Exception as e:
             print(f"保存Cookie变量异常: {e}")
+
