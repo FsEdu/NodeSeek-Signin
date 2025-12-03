@@ -431,10 +431,11 @@ def print_signin_stats(stats, account_name):
     
 
 # ---------------- 主流程 ----------------
+
 if __name__ == "__main__":
     solver_type = os.getenv("SOLVER_TYPE", "turnstile")
     api_base_url = os.getenv("API_BASE_URL", "")
-    client_key = os.getenv("CLIENTT_KEY", "") 
+    client_key = os.getenv("CLIENTT_KEY", "")
     ns_random = os.getenv("NS_RANDOM", "true")
 
     env_type = detect_environment()
@@ -490,12 +491,14 @@ if __name__ == "__main__":
         
         print(f"\n==== 账号 {display_user} 开始签到 ====")
         
+        # 先用旧 Cookie 尝试签到
         if cookie:
             result, msg = sign(cookie, ns_random)
         else:
             result, msg = "invalid", "无Cookie"
 
         if result in ["success", "already"]:
+            # ✅ 旧 Cookie 签到成功
             print(f"账号 {display_user} 签到成功: {msg}")
             
             print("正在查询签到收益统计...")
@@ -509,13 +512,21 @@ if __name__ == "__main__":
                 try:
                     notification_msg = f"账号 {display_user} 签到成功：{msg}"
                     if stats:
-                        notification_msg += f"\n{stats['period']}已签到{stats['days_count']}天，共获得{stats['total_amount']}个鸡腿，平均{stats['average']}个/天"
+                        notification_msg += (
+                            f"\n{stats['period']}已签到{stats['days_count']}天，"
+                            f"共获得{stats['total_amount']}个鸡腿，平均{stats['average']}个/天"
+                        )
                     send("NodeSeek 签到", notification_msg)
                 except Exception as e:
                     print(f"发送通知失败: {e}")
         else:
-            print(f"签到失败或Cookie无效: {msg}")
+            # ❌ 旧 Cookie 签到失败，这里区分是接口异常还是 Cookie 问题
+            if result == "error":
+                print(f"签到请求异常（可能被风控/返回HTML）: {msg}")
+            else:
+                print(f"签到失败或Cookie无效: {msg}")
             
+            # 有账号密码就尝试重新登录获取新 Cookie
             if user and password:
                 print("尝试重新登录获取新Cookie...")
                 new_cookie = session_login(user, password, solver_type, api_base_url, client_key)
@@ -523,6 +534,7 @@ if __name__ == "__main__":
                     print("登录成功，使用新Cookie重新签到...")
                     result, msg = sign(new_cookie, ns_random)
                     if result in ["success", "already"]:
+                        # ✅ 新 Cookie 签到成功
                         print(f"账号 {display_user} 签到成功: {msg}")
                         cookies_updated = True
                         
@@ -533,18 +545,29 @@ if __name__ == "__main__":
                         else:
                             print(f"统计查询失败: {stats_msg}")
                         
+                        # 更新内存中的 cookie 列表
                         cookie_list[i] = new_cookie
                         
                         if hadsend:
                             try:
                                 notification_msg = f"账号 {display_user} 签到成功：{msg}"
                                 if stats:
-                                    notification_msg += f"\n{stats['period']}已签到{stats['days_count']}天，共获得{stats['total_amount']}个鸡腿，平均{stats['average']}个/天"
+                                    notification_msg += (
+                                        f"\n{stats['period']}已签到{stats['days_count']}天，"
+                                        f"共获得{stats['total_amount']}个鸡腿，平均{stats['average']}个/天"
+                                    )
                                 send("NodeSeek 签到", notification_msg)
                             except Exception as e:
                                 print(f"发送通知失败: {e}")
                     else:
-                        print(f"账号 {display_user} 重新签到仍然失败: {msg}")
+                        # 新 Cookie 仍然签到失败，同样区分错误类型
+                        if result == "error":
+                            print(
+                                f"账号 {display_user} 使用新Cookie签到请求异常"
+                                f"（可能被风控/返回HTML）: {msg}"
+                            )
+                        else:
+                            print(f"账号 {display_user} 重新签到仍然失败: {msg}")
                 else:
                     print(f"账号 {display_user} 登录失败，无法获取新Cookie")
                     if hadsend:
@@ -563,5 +586,6 @@ if __name__ == "__main__":
             print("所有Cookie已成功保存")
         except Exception as e:
             print(f"保存Cookie变量异常: {e}")
+
 
 
