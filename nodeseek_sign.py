@@ -254,20 +254,47 @@ def session_login(user, password, solver_type, api_base_url, client_key):
 
 # ---------------- 签到逻辑 ----------------
 def sign(ns_cookie, ns_random):
+    """
+    使用现有 Cookie 执行签到。
+    返回值:
+        ("success" | "already" | "invalid" | "fail" | "error", msg)
+    其中:
+        - "error" 主要用于网络异常 / JSON 解析失败，方便和 Cookie 失效区分。
+    """
     if not ns_cookie:
         return "invalid", "无有效Cookie"
-        
+
     headers = {
-        'User-Agent': "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36 Edg/125.0.0.0",
-        'origin': "https://www.nodeseek.com",
-        'referer': "https://www.nodeseek.com/board",
-        'Content-Type': 'application/json',
-        'Cookie': ns_cookie
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/125.0.0.0 Safari/537.36 Edg/125.0.0.0"
+        ),
+        "origin": "https://www.nodeseek.com",
+        "referer": "https://www.nodeseek.com/board",
+        "Content-Type": "application/json",
+        "Cookie": ns_cookie,
     }
+
+    url = f"https://www.nodeseek.com/api/attendance?random={ns_random}"
     try:
-        url = f"https://www.nodeseek.com/api/attendance?random={ns_random}"
         response = requests.post(url, headers=headers, impersonate="chrome110")
-        data = response.json()
+
+        # 先打印基础调试信息
+        print(f"[调试] 签到接口 HTTP 状态码: {response.status_code}")
+
+        # 单独捕获 JSON 解析错误，打印部分返回内容
+        try:
+            data = response.json()
+        except Exception as e:
+            debug_msg = (
+                f"JSON 解析失败: {e} | 状态码={response.status_code} | "
+                f"响应前200字符={repr(response.text[:200])}"
+            )
+            print("[调试] 签到接口 JSON 解析失败，可能被风控/返回HTML:", debug_msg)
+            # 标记为 error，外层就不要简单当成 “Cookie 无效”
+            return "error", debug_msg
+
         msg = data.get("message", "")
         if "鸡腿" in msg or data.get("success"):
             return "success", msg
@@ -275,9 +302,13 @@ def sign(ns_cookie, ns_random):
             return "already", msg
         elif data.get("status") == 404:
             return "invalid", msg
-        return "fail", msg
+        else:
+            return "fail", msg
     except Exception as e:
-        return "error", str(e)
+        # 这里是真正的网络级异常
+        err = f"请求异常: {e}"
+        print("[调试] 签到接口请求异常:", err)
+        return "error", err
 
 # ---------------- 查询签到收益统计函数 ----------------
 def get_signin_stats(ns_cookie, days=30):
@@ -532,4 +563,5 @@ if __name__ == "__main__":
             print("所有Cookie已成功保存")
         except Exception as e:
             print(f"保存Cookie变量异常: {e}")
+
 
