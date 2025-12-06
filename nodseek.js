@@ -1,5 +1,3 @@
-// nodseek.js - Cloudflare Worker 版 NodeSeek 多账号签到（新接口）
-
 export default {
   // 手动访问 Worker 的 HTTP 入口
   async fetch(request, env, ctx) {
@@ -129,7 +127,6 @@ async function checkInAccount(cookie) {
     const res = await fetch(url, {
       method: "POST",
       headers,
-      // CloudCheckin 里用的 resolveOverride: 'ipv4'
       cf: { resolveOverride: "ipv4" }
     });
 
@@ -164,7 +161,6 @@ async function checkInAccount(cookie) {
         };
       }
 
-      // success = false 的情况
       return {
         success: false,
         message: msg || "签到失败（服务端返回未成功）",
@@ -173,7 +169,6 @@ async function checkInAccount(cookie) {
       };
     }
 
-    // JSON 解析失败但 HTTP 200
     return {
       success: false,
       message: "返回内容无法解析为 JSON",
