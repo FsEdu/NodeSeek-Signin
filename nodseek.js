@@ -1,12 +1,34 @@
+// nodseek.js - Cloudflare Worker 版 NodeSeek 多账号签到（新接口）
+
 export default {
+  // 手动访问 Worker 的 HTTP 入口
   async fetch(request, env, ctx) {
-    return new Response("✅ NodeSeek 签到 Worker 正常运行中");
+    const url = new URL(request.url);
+
+    if (url.pathname === "/checkin") {
+      const results = await handleSignIn(env);
+      return new Response(
+        JSON.stringify({
+          ok: true,
+          message: "NodeSeek 多账号签到完成",
+          results
+        }),
+        { headers: { "Content-Type": "application/json" } }
+      );
+    }
+
+    // 默认返回健康检查
+    return new Response(
+      "✅ NodeSeek 签到 Worker 正常运行中，访问 /checkin 可手动触发签到",
+      { status: 200 }
+    );
   },
 
+  // 定时 Cron 触发入口
   async scheduled(event, env, ctx) {
     await handleSignIn(env);
   }
-}
+};
 
 async function handleSignIn(env) {
   const results = [];
@@ -14,8 +36,9 @@ async function handleSignIn(env) {
   const wisdomStatements = [
     { text: "人生不是等待暴风雨过去，而是学会在雨中跳舞。", author: "维维安·格林" },
     { text: "我思故我在。", author: "笛卡尔" },
-    { text: "你必须成为你希望这个世界出现的改变。", author: "甘地" },
-    { text: "成功不是最终的，失败不是致命的，继续前进的勇气才是最重要的。", author: "丘吉尔" },
+    { text: "不是所有的云都下雨，不是所有的努力都有回报，但所有的努力都值得尊重。", author: "网络" },
+    { text: "种一棵树最好的时间是十年前，其次是现在。", author: "非洲谚语" },
+    { text: "知之者不如好之者，好之者不如乐之者。", author: "孔子" },
     { text: "真正的聪明，是知道自己无知。", author: "苏格拉底" },
     { text: "Stay hungry, stay foolish.", author: "乔布斯" },
     { text: "你若盛开，蝴蝶自来；你若精彩，天自安排。", author: "网络" },
@@ -24,45 +47,57 @@ async function handleSignIn(env) {
     { text: "给我一个支点，我可以撬动整个地球。", author: "阿基米德" }
   ];
 
+  const tgToken = env.TG_BOT_TOKEN;
+  const tgUser = env.TG_USER_ID;
+
+  // 北京时间戳
+  const now = new Date();
+  const utc8Time = new Date(now.getTime() + 8 * 60 * 60 * 1000);
+  const timeStr = utc8Time.toLocaleString("zh-CN", {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit"
+  });
+
   for (let i = 1; i <= 10; i++) {
     const cookie = env[`NS_COOKIE_${i}`];
     const user = env[`USER_${i}`];
-    const tgToken = env.TG_BOT_TOKEN;
-    const tgUser = env.TG_USER_ID;
 
     if (!cookie || !user) continue;
 
-    const url = "https://node.seek.ink/plugin.php?id=dsu_paulsign:sign&operation=qiandao&formhash=xxxx";
-
     try {
-      const res = await fetch(url, {
-        method: "GET",
-        headers: {
-          "Cookie": cookie,
-          "User-Agent": "Mozilla/5.0"
-        }
-      });
+      // 随机延时 1~10 秒，稍微自然一点
+      const delay = 1000 + Math.floor(Math.random() * 9000);
+      await sleep(delay);
 
-      const text = await res.text();
+      const result = await checkInAccount(cookie);
+
       const wisdom = getRandomWisdom(wisdomStatements);
-      let msg = "";
+      let msg = `⏰ 时间：${timeStr}\n\n账号 *${user}*：`;
 
-      if (text.includes("签到成功")) {
-        msg = `✅ NodeSeek 签到成功\n\n` +
-              `账号 *${user}*：今天已完成签到。\n\n` +
-              `💡 出自 *${wisdom.author}*：${wisdom.text}`;
+      if (result.success) {
+        const reward = result.reward ?? "-";
+        msg += `\n✅ NodeSeek 签到成功！\n\n`
+             + `今日奖励：${reward}\n`
+             + (result.rawMessage ? `服务端消息：${result.rawMessage}\n\n` : `\n`)
+             + `💡 出自 *${wisdom.author}*：${wisdom.text}`;
       } else {
-        const reason = extractFailureReason(text);
-        msg = `❌ NodeSeek 签到失败\n\n` +
-              `账号 *${user}*：${reason}\n\n` +
-              `💡 出自 *${wisdom.author}*：${wisdom.text}`;
+        msg += `\n❌ NodeSeek 签到失败\n\n`
+             + `原因：${result.message}\n\n`
+             + (result.response ? `返回内容片段：\n${result.response.slice(0, 200)}\n\n` : ``)
+             + `💡 出自 *${wisdom.author}*：${wisdom.text}`;
       }
 
       await sendTG(tgToken, tgUser, msg);
       results.push(msg);
     } catch (err) {
-      const msg = `❌ *${user}* 签到异常：${err.message}`;
-      await sendTG(env.TG_BOT_TOKEN, env.TG_USER_ID, msg);
+      const msg =
+        `⏰ 时间：${timeStr}\n\n` +
+        `❌ *${user}* 签到异常：${err.message}`;
+      await sendTG(tgToken, tgUser, msg);
       results.push(msg);
     }
   }
@@ -70,8 +105,92 @@ async function handleSignIn(env) {
   return results;
 }
 
+// 使用新接口 https://www.nodeseek.com/api/attendance?random=true
+async function checkInAccount(cookie) {
+  const headers = {
+    "Accept": "*/*",
+    "Accept-Encoding": "gzip, deflate, br, zstd",
+    "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+    "Content-Length": "0",
+    "Origin": "https://www.nodeseek.com",
+    "Referer": "https://www.nodeseek.com/board",
+    "Sec-CH-UA": '"Chromium";v="134", "Not:A-Brand";v="24", "Google Chrome";v="134"',
+    "Sec-CH-UA-Mobile": "?0",
+    "Sec-CH-UA-Platform": '"Windows"',
+    "Sec-Fetch-Dest": "empty",
+    "Sec-Fetch-Mode": "cors",
+    "Sec-Fetch-Site": "same-origin",
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36",
+    "Cookie": cookie
+  };
+
+  try {
+    const url = "https://www.nodeseek.com/api/attendance?random=true";
+    const res = await fetch(url, {
+      method: "POST",
+      headers,
+      // CloudCheckin 里用的 resolveOverride: 'ipv4'
+      cf: { resolveOverride: "ipv4" }
+    });
+
+    const text = await res.text();
+    let json = null;
+
+    try {
+      json = JSON.parse(text);
+    } catch (_) {
+      // 不是 JSON 就当纯文本
+    }
+
+    if (!res.ok) {
+      return {
+        success: false,
+        message: `HTTP 状态码 ${res.status}`,
+        response: text
+      };
+    }
+
+    if (json && typeof json === "object") {
+      const success = !!json.success;
+      const msg = json.message || "";
+      const reward = json.data && json.data.reward;
+
+      if (success) {
+        return {
+          success: true,
+          message: msg || "签到成功",
+          rawMessage: msg,
+          reward
+        };
+      }
+
+      // success = false 的情况
+      return {
+        success: false,
+        message: msg || "签到失败（服务端返回未成功）",
+        rawMessage: msg,
+        response: text
+      };
+    }
+
+    // JSON 解析失败但 HTTP 200
+    return {
+      success: false,
+      message: "返回内容无法解析为 JSON",
+      response: text
+    };
+  } catch (error) {
+    return {
+      success: false,
+      message: `请求异常：${error.message}`
+    };
+  }
+}
+
+// 发送 Telegram 通知
 async function sendTG(botToken, chatId, msg) {
   if (!botToken || !chatId) return;
+
   const url = `https://api.telegram.org/bot${botToken}/sendMessage`;
   await fetch(url, {
     method: "POST",
@@ -84,27 +203,12 @@ async function sendTG(botToken, chatId, msg) {
   });
 }
 
-function extractFailureReason(text) {
-  if (text.includes("您今日已经签过到")) {
-    return "已签到过，请勿重复操作。";
-  } else if (text.includes("账号或密码错误")) {
-    return "账号或密码错误，请检查登录信息。";
-  } else if (text.includes("未登录") || text.includes("Cookie无效")) {
-    return "未登录或 Cookie 无效，请检查 Cookie 设置。";
-  }
-
-  const match = text.match(/<div[^>]*class=["']?alert_error["']?[^>]*>([\s\S]*?)<\/div>/i) ||
-                text.match(/<p[^>]*class=["']?error["']?[^>]*>([\s\S]*?)<\/p>/i) ||
-                text.match(/<div[^>]*id=["']?messagetext["']?[^>]*>[\s\S]*?<p>(.*?)<\/p>/i);
-
-  if (match && match[1]) {
-    const raw = match[1].replace(/<[^>]+>/g, '').trim();
-    return raw || "发生未知错误，请稍后再试。";
-  }
-
-  return "未知错误，请稍后再试。";
-}
-
+// 随机选一句鸡汤
 function getRandomWisdom(list) {
   return list[Math.floor(Math.random() * list.length)];
+}
+
+// 延时工具
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
