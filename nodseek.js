@@ -127,7 +127,6 @@ async function checkInAccount(cookie) {
     const res = await fetch(url, {
       method: "POST",
       headers,
-      cf: { resolveOverride: "ipv4" }
     });
 
     const text = await res.text();
@@ -207,3 +206,4 @@ function getRandomWisdom(list) {
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
+
